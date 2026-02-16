@@ -3,8 +3,68 @@
 function Rename-ImagesByExifOrFilename {
 <#
 .SYNOPSIS
-    Organizes image files by renaming them based on EXIF/filename date.
-    PATCHED: Allows Absolute Paths for Output Folders.
+    Organizes image files by renaming them based on their EXIF date or filename date,
+    moving them into a central folder, and handling duplicates.
+
+.DESCRIPTION
+    This script scans a specified path for image files (JPG, PNG, GIF, BMP, TIFF).
+    It prioritizes extracting the 'Date Taken' from EXIF metadata. If EXIF data is
+    not available or invalid, it attempts to parse a date from common filename patterns:
+    'YYYYMMDD_HHmmss', 'YYYYMMDDHHmmss', or 10/13-digit Unix timestamps.
+
+    Images are then renamed to a 'yyyy-MM-dd HH꞉mm꞉ss' format (using a special colon 
+    modifier to be Windows-compatible). If the filename contains "screenshot", it applies 
+    a specific naming prefix.
+
+    Small images (potential thumbnails, defined as less than 600x600 pixels in both dimensions)
+    are moved to a dedicated 'Thumbnails' folder. All other images go to an 'Organized Photos' folder.
+
+    Duplicate files are detected based on a combination of their extracted date/time
+    and their MD5 file hash, ensuring only exact duplicates are flagged.
+    Destructive actions (renaming, moving, deleting duplicates) are logged to a text file.
+
+    **Interactive Control:**
+    - The script uses `SupportsShouldProcess`, enabling `-WhatIf` for a dry run (showing what *would* happen)
+      and `-Confirm` for interactive prompts before each significant action (move, delete).
+    - If a file's name already matches the target format and it's in the correct destination folder,
+      you'll be prompted specifically to confirm if you want to move it, providing fine-grained control.
+
+.PARAMETER Path
+    The root directory to scan for image files.
+    Defaults to the current working directory (`Get-Location`).
+
+.PARAMETER OrganizedPhotosFolder
+    The folder where primary (non-thumbnail) images will be moved.
+    Can be a relative name or an absolute path. Defaults to "Organized Photos".
+
+.PARAMETER ThumbnailsFolder
+    The folder where small images (thumbnails) will be moved.
+    Can be a relative name or an absolute path. Defaults to "Thumbnails".
+
+.PARAMETER LogFile
+    The name of the log file to record all processing actions.
+    Defaults to "log.txt".
+
+.PARAMETER AppendLog
+    If specified, new log entries will be appended to the existing log file.
+    Otherwise, the log file will be overwritten at the start of the script run.
+
+.PARAMETER TimeZone
+    The target time zone for converting Unix timestamps found in filenames.
+    This should be a valid system time zone ID (e.g., 'UTC', 'Taipei Standard Time').
+    Defaults to 'UTC'.
+
+.EXAMPLE
+    Rename-ImagesByExifOrFilename -Path "C:\MyVacationPhotos" -WhatIf -Verbose
+    # Scans "C:\MyVacationPhotos", displays detailed output of planned actions without changes.
+
+.EXAMPLE
+    Rename-ImagesByExifOrFilename -Confirm -TimeZone "Taipei Standard Time"
+    # Scans current directory, prompts for confirmation before actions.
+
+.EXAMPLE
+    Rename-ImagesByExifOrFilename -Path "D:\Images"
+    # Scans D:\Images and processes files automatically.
 #>
     [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
     param (
@@ -27,8 +87,12 @@ function Rename-ImagesByExifOrFilename {
         [string]$TimeZone = "UTC"
     )
 
-    # Interactive Prompt
-    if ($PSBoundParameters.Count -eq 0) {
+    # Filter out common parameters (Verbose, WhatIf, etc.) to check if user provided specific inputs
+    $commonParams = @('Verbose', 'Debug', 'ErrorAction', 'WarningAction', 'InformationAction', 'ErrorVariable', 'WarningVariable', 'InformationVariable', 'OutVariable', 'OutBuffer', 'PipelineVariable', 'WhatIf', 'Confirm')
+    $userProvidedConfig = $PSBoundParameters.Keys | Where-Object { $_ -notin $commonParams }
+
+    # Only show prompt if no configuration parameters were provided
+    if (-not $userProvidedConfig) {
         Write-Host "Interactive Mode: Press Enter to accept defaults." -ForegroundColor Cyan
         
         $i = Read-Host "Source Path [$Path]"
@@ -60,17 +124,14 @@ function Rename-ImagesByExifOrFilename {
         return
     }
 
-    # FIX: Ensure we get a clean string path, removing Provider prefixes if present
     $rootPath = Resolve-Path $Path | Select-Object -ExpandProperty Path
 
-    # FIX: Handle Absolute Paths vs Relative Names for Organized Folder
     if ([System.IO.Path]::IsPathRooted($OrganizedPhotosFolder)) {
         $organizedPhotosFullPath = $OrganizedPhotosFolder
     } else {
         $organizedPhotosFullPath = Join-Path -Path $rootPath -ChildPath $OrganizedPhotosFolder
     }
 
-    # FIX: Handle Absolute Paths vs Relative Names for Thumbnails Folder
     if ([System.IO.Path]::IsPathRooted($ThumbnailsFolder)) {
         $thumbnailsFullPath = $ThumbnailsFolder
     } else {
@@ -79,7 +140,6 @@ function Rename-ImagesByExifOrFilename {
 
     $script:logFilePath = Join-Path -Path $rootPath -ChildPath $LogFile
 
-    # Create directories
     if (-not (Test-Path $organizedPhotosFullPath)) {
         New-Item -Path $organizedPhotosFullPath -ItemType Directory -Force | Out-Null
     }
@@ -121,7 +181,6 @@ function Rename-ImagesByExifOrFilename {
 
     $script:processedImageSignatures = @{}
 
-    # Recursively get images, excluding the output folders to prevent loops
     $imageFiles = Get-ChildItem -Path $rootPath -Recurse -File | Where-Object {
         $_.Extension -match "\.(jpg|jpeg|png|gif|bmp|tiff)$" -and
         $_.DirectoryName -ne $organizedPhotosFullPath -and
@@ -186,7 +245,6 @@ function Rename-ImagesByExifOrFilename {
 
             $destinationFolder = if ($isThumbnail) { $thumbnailsFullPath } else { $organizedPhotosFullPath }
             
-            # Special colon U+A789 used for time to allow windows filenames
             $dateString = $extractedDateTime.ToString("yyyy-MM-dd HH꞉mm꞉ss")
             
             if ($file.Name -match "screenshot") {
@@ -242,4 +300,3 @@ function Rename-ImagesByExifOrFilename {
         }
     }
 }
-
