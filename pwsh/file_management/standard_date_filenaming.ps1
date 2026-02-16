@@ -4,19 +4,7 @@ function Rename-ImagesByExifOrFilename {
 <#
 .SYNOPSIS
     Organizes image files by renaming them based on EXIF/filename date.
-    Handles 'Screenshot' naming and duplicates via MD5.
-.PARAMETER Path
-    Root directory to scan. Defaults to current location.
-.PARAMETER OrganizedPhotosFolder
-    Destination for main images.
-.PARAMETER ThumbnailsFolder
-    Destination for small images (<600x600).
-.PARAMETER LogFile
-    Log filename.
-.PARAMETER AppendLog
-    Append to existing log instead of overwriting.
-.PARAMETER TimeZone
-    Target time zone for Unix timestamps.
+    PATCHED: Allows Absolute Paths for Output Folders.
 #>
     [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
     param (
@@ -39,17 +27,17 @@ function Rename-ImagesByExifOrFilename {
         [string]$TimeZone = "UTC"
     )
 
-    # Interactive Prompt (Only for main settings, skips LogFile/AppendLog)
+    # Interactive Prompt
     if ($PSBoundParameters.Count -eq 0) {
         Write-Host "Interactive Mode: Press Enter to accept defaults." -ForegroundColor Cyan
         
-        $i = Read-Host "Path [$Path]"
+        $i = Read-Host "Source Path [$Path]"
         if ($i) { $Path = $i }
 
-        $i = Read-Host "Organized Photos Folder [$OrganizedPhotosFolder]"
+        $i = Read-Host "Organized Photos Destination [$OrganizedPhotosFolder]"
         if ($i) { $OrganizedPhotosFolder = $i }
 
-        $i = Read-Host "Thumbnails Folder [$ThumbnailsFolder]"
+        $i = Read-Host "Thumbnails Destination [$ThumbnailsFolder]"
         if ($i) { $ThumbnailsFolder = $i }
 
         $i = Read-Host "TimeZone [$TimeZone]"
@@ -72,13 +60,32 @@ function Rename-ImagesByExifOrFilename {
         return
     }
 
+    # FIX: Ensure we get a clean string path, removing Provider prefixes if present
     $rootPath = Resolve-Path $Path | Select-Object -ExpandProperty Path
-    $organizedPhotosFullPath = Join-Path -Path $rootPath -ChildPath $OrganizedPhotosFolder
-    $thumbnailsFullPath = Join-Path -Path $rootPath -ChildPath $ThumbnailsFolder
+
+    # FIX: Handle Absolute Paths vs Relative Names for Organized Folder
+    if ([System.IO.Path]::IsPathRooted($OrganizedPhotosFolder)) {
+        $organizedPhotosFullPath = $OrganizedPhotosFolder
+    } else {
+        $organizedPhotosFullPath = Join-Path -Path $rootPath -ChildPath $OrganizedPhotosFolder
+    }
+
+    # FIX: Handle Absolute Paths vs Relative Names for Thumbnails Folder
+    if ([System.IO.Path]::IsPathRooted($ThumbnailsFolder)) {
+        $thumbnailsFullPath = $ThumbnailsFolder
+    } else {
+        $thumbnailsFullPath = Join-Path -Path $rootPath -ChildPath $ThumbnailsFolder
+    }
+
     $script:logFilePath = Join-Path -Path $rootPath -ChildPath $LogFile
 
-    New-Item -Path $organizedPhotosFullPath -ItemType Directory -Force | Out-Null
-    New-Item -Path $thumbnailsFullPath -ItemType Directory -Force | Out-Null
+    # Create directories
+    if (-not (Test-Path $organizedPhotosFullPath)) {
+        New-Item -Path $organizedPhotosFullPath -ItemType Directory -Force | Out-Null
+    }
+    if (-not (Test-Path $thumbnailsFullPath)) {
+        New-Item -Path $thumbnailsFullPath -ItemType Directory -Force | Out-Null
+    }
 
     if (-not $AppendLog) {
         Set-Content -Path $script:logFilePath -Value "Log started at $(Get-Date)" -Force
@@ -114,6 +121,7 @@ function Rename-ImagesByExifOrFilename {
 
     $script:processedImageSignatures = @{}
 
+    # Recursively get images, excluding the output folders to prevent loops
     $imageFiles = Get-ChildItem -Path $rootPath -Recurse -File | Where-Object {
         $_.Extension -match "\.(jpg|jpeg|png|gif|bmp|tiff)$" -and
         $_.DirectoryName -ne $organizedPhotosFullPath -and
@@ -178,7 +186,7 @@ function Rename-ImagesByExifOrFilename {
 
             $destinationFolder = if ($isThumbnail) { $thumbnailsFullPath } else { $organizedPhotosFullPath }
             
-            # Special colon U+A789 used for time
+            # Special colon U+A789 used for time to allow windows filenames
             $dateString = $extractedDateTime.ToString("yyyy-MM-dd HH꞉mm꞉ss")
             
             if ($file.Name -match "screenshot") {
@@ -234,3 +242,4 @@ function Rename-ImagesByExifOrFilename {
         }
     }
 }
+
